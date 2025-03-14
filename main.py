@@ -4,6 +4,7 @@ from database import write_to_database, is_database_connected
 from skills import get_skills_for_lesson, search_courses_by_skill, search_courses_by_skill_database, extract_and_get_title, search_courses_by_skill_url
 from pdf_utils import extract_text_from_pdf, split_by_semester, process_pages_by_lesson, extract_text_after_marker
 from config import DB_CONFIG
+from collections import Counter, defaultdict
 import os
 import json
 from helpers import find_possible_university, load_from_cache, save_to_cache, load_university_cache, save_cache
@@ -19,11 +20,7 @@ from collections import OrderedDict
 import psycopg2
 import mysql.connector
 from concurrent.futures import ThreadPoolExecutor
-
-
-
 import requests
-
 
 skill_extractor = SkillExtractor()
 
@@ -36,6 +33,7 @@ else:
     university_cache = {}
 
 app = FastAPI(title="SkillCrawl API", description="API for skill extraction and course search.")
+
 
 class CrawlRequest(BaseModel):
     url: str
@@ -57,6 +55,13 @@ class SkillSearchURLRequest(BaseModel):
 class LessonRequest(BaseModel):
     university_name: str
     lesson_name: str
+
+class TopSkillsAllRequest(BaseModel):
+    top_n: Optional[int] = 20
+
+class TopSkillsRequest(BaseModel):
+    university_name: str
+    top_n: Optional[int] = 20
 
 @app.get("/health")
 def health_check():
@@ -425,6 +430,73 @@ def get_universities_by_skills(request: SkillListRequest):
     
     return filtered_universities
 
+@app.post("/get_top_skills")
+def get_top_skills(request: TopSkillsRequest):
+    if not is_database_connected(DB_CONFIG):
+        raise HTTPException(status_code=500, detail="Database connection failed.")
+    
+    query = """
+        SELECT s.skill_name 
+        FROM Skills s
+        JOIN Lessons l ON s.lesson_id = l.lesson_id
+        JOIN University u ON l.university_id = u.university_id
+        WHERE u.university_name = %s
+    """
+    
+    try:
+        conn = mysql.connector.connect(**DB_CONFIG)
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(query, (request.university_name,))
+        results = cursor.fetchall()
+        
+        skill_counter = Counter(row["skill_name"] for row in results)
+        top_skills = [{"skill": skill, "frequency": count} for skill, count in skill_counter.most_common(request.top_n)]
+        
+    except mysql.connector.Error as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+    
+    finally:
+        cursor.close()
+        conn.close()
+    
+    return {"university_name": request.university_name, "top_skills": top_skills}
+
+
+@app.post("/get_top_skills_all")
+def get_top_skills_all(request: TopSkillsAllRequest):
+    if not is_database_connected(DB_CONFIG):
+        raise HTTPException(status_code=500, detail="Database connection failed.")
+    
+    query = """
+        SELECT s.skill_name, u.university_name
+        FROM Skills s
+        JOIN Lessons l ON s.lesson_id = l.lesson_id
+        JOIN University u ON l.university_id = u.university_id
+    """
+    
+    try:
+        conn = mysql.connector.connect(**DB_CONFIG)
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(query)
+        results = cursor.fetchall()
+        
+        skill_counter = Counter(row["skill_name"] for row in results)
+        university_skill_map = defaultdict(set)
+        
+        for row in results:
+            university_skill_map[row["skill_name"].lower()].add(row["university_name"])
+        
+        top_skills = [{"skill": skill, "frequency": count, "universities": list(university_skill_map[skill.lower()])} 
+                      for skill, count in skill_counter.most_common(request.top_n)]
+        
+    except mysql.connector.Error as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+    
+    finally:
+        cursor.close()
+        conn.close()
+    
+    return {"top_skills": top_skills}
 
 
 @app.get("/search_json_in_cache")
