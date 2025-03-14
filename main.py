@@ -21,6 +21,7 @@ import mysql.connector
 from concurrent.futures import ThreadPoolExecutor
 
 
+
 import requests
 
 
@@ -38,6 +39,9 @@ app = FastAPI(title="SkillCrawl API", description="API for skill extraction and 
 
 class CrawlRequest(BaseModel):
     url: str
+
+class SkillListRequest(BaseModel):
+    skills: List[str]
 
 class PDFProcessingRequest(BaseModel):
     pdf_name: str
@@ -366,6 +370,62 @@ def search_skill_url(request: SkillSearchURLRequest):
     return {"results": results}
 
 
+@app.post("/get_universities_by_skills")
+def get_universities_by_skills(request: SkillListRequest):
+    if not is_database_connected(DB_CONFIG):
+        raise HTTPException(status_code=500, detail="Database connection failed.")
+    
+    query = """
+        SELECT u.university_name, l.lesson_name, s.skill_name 
+        FROM Skills s
+        JOIN Lessons l ON s.lesson_id = l.lesson_id
+        JOIN University u ON l.university_id = u.university_id
+        WHERE s.skill_name IN (%s)
+    """
+    
+    skill_placeholders = ', '.join(['%s'] * len(request.skills))
+    formatted_query = query.replace("%s", skill_placeholders)
+    
+    try:
+        conn = mysql.connector.connect(**DB_CONFIG)
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(formatted_query, tuple(request.skills))
+        results = cursor.fetchall()
+    
+        university_skill_counts = {}
+        university_courses = {}
+        
+        for row in results:
+            uni = row["university_name"]
+            lesson = row["lesson_name"]
+            skill = row["skill_name"]
+            
+            if uni not in university_skill_counts:
+                university_skill_counts[uni] = set()
+            university_skill_counts[uni].add(skill)
+            
+            if uni not in university_courses:
+                university_courses[uni] = {}
+            if lesson not in university_courses[uni]:
+                university_courses[uni][lesson] = []
+            university_courses[uni][lesson].append(skill)
+        
+        # Filter universities that have all required skills
+        filtered_universities = {
+            uni: courses for uni, courses in university_courses.items()
+            if len(university_skill_counts[uni]) == len(request.skills)
+        }
+    
+    except mysql.connector.Error as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+    
+    finally:
+        cursor.close()
+        conn.close()
+    
+    return filtered_universities
+
+
 
 @app.get("/search_json_in_cache")
 def search_json_in_cache(university_name: str):
@@ -574,8 +634,6 @@ def crawl_university(request: CrawlRequest):
     course_info = crawler.crawl()
     
     return {"university": crawler.university_name, "courses": course_info.semesters}
-
-
 
 
 if __name__ == "__main__":
