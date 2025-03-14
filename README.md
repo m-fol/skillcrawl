@@ -1,8 +1,16 @@
 # SKILLCRAWL 
-### *Crawler written using the esco_skill_extractor (PetraSkill) library for identifying relevant skills in university lessons, printing URLs and skill keywords*
+### *Crawler written using the esco_skill_extractor (PetraSkill) library for identifying relevant skills in university lessons, printing URLs and skill keywords. Performs frequency analysis and queries.*
 
-### Not implemented: Compatibility with other syllabus outside EU.
+## Quick Guide - Running the Curriculum Extractor
+```
+uvicorn main:app --reload
+```
+- Upon running this to the command line, make sure to open **127.0.0.1:8000/docs#/** in your browser.
+- Ensure that you are running XAMPP and have intialized the database locally using the database.sql file.
+- It should lead you now to the Swagger UI page.
 
+-----------------------------------------
+## Old Guide - For when you want to run it in CMD
 ## Running the crawler:
 ```
 python skillcrawl.py
